@@ -236,6 +236,68 @@ def fetch_full_description(redirect_url: str) -> dict:
     return {"description": browser_text, "ats": None, "slug": None}
 
 
+ADZUNA_SUPPORTED_COUNTRIES = {
+    "gb", "us", "at", "au", "br", "ca", "de", "fr", "in", "it", "nl", "nz", "pl", "ru", "sg", "za"
+}
+
+_COUNTRY_INFERENCE_RULES = [
+    (re.compile(r"\b(us|usa|united states|north carolina|nc|raleigh|durham|chapel hill|cary|california|new york|texas|florida|virginia|georgia|washington|seattle|austin|san francisco|chicago)\b", re.IGNORECASE), "us"),
+    (re.compile(r"\b(canada|canadian|alberta|ontario|quebec|british columbia|bc|toronto|vancouver|calgary|edmonton|ottawa|montreal)\b", re.IGNORECASE), "ca"),
+    (re.compile(r"\b(uk|united kingdom|great britain|england|scotland|wales|london|manchester|birmingham)\b", re.IGNORECASE), "gb"),
+    (re.compile(r"\b(australia|sydney|melbourne|brisbane|perth)\b", re.IGNORECASE), "au"),
+    (re.compile(r"\b(germany|deutschland|berlin|munich|münchen|frankfurt|hamburg)\b", re.IGNORECASE), "de"),
+    (re.compile(r"\b(france|paris|lyon)\b", re.IGNORECASE), "fr"),
+    (re.compile(r"\b(india|bangalore|bengaluru|mumbai|delhi|hyderabad|pune)\b", re.IGNORECASE), "in"),
+    (re.compile(r"\b(netherlands|holland|amsterdam|rotterdam)\b", re.IGNORECASE), "nl"),
+    (re.compile(r"\b(new zealand|auckland|wellington)\b", re.IGNORECASE), "nz"),
+    (re.compile(r"\b(poland|polska|warsaw|warszawa|krakow|kraków)\b", re.IGNORECASE), "pl"),
+    (re.compile(r"\b(singapore)\b", re.IGNORECASE), "sg"),
+    (re.compile(r"\b(south africa|johannesburg|cape town)\b", re.IGNORECASE), "za"),
+    (re.compile(r"\b(brazil|brasil|sao paulo|são paulo|rio)\b", re.IGNORECASE), "br"),
+    (re.compile(r"\b(austria|österreich|vienna|wien)\b", re.IGNORECASE), "at"),
+    (re.compile(r"\b(italy|italia|rome|roma|milan|milano)\b", re.IGNORECASE), "it"),
+]
+
+
+def infer_adzuna_country(params: dict) -> str:
+    """Infer the 2-letter Adzuna country code without hardcoding.
+
+    Order of precedence:
+    1. Explicit 'country' in params (e.g., country: us in aggregators.yaml).
+    2. Inferred from 'where' in params (city, state, or country name).
+    3. Inferred from ADZUNA_COUNTRY environment variable.
+    4. Inferred from filters.yaml's location_allow_patterns.
+    5. Fallback to 'us'.
+    """
+    if "country" in params and params["country"]:
+        val = str(params["country"]).strip().lower()
+        if val in ADZUNA_SUPPORTED_COUNTRIES or len(val) == 2:
+            return val
+
+    where = str(params.get("where", "")).strip()
+    if where:
+        if where.lower() in ADZUNA_SUPPORTED_COUNTRIES:
+            return where.lower()
+        for pattern, code in _COUNTRY_INFERENCE_RULES:
+            if pattern.search(where):
+                return code
+
+    env_country = os.environ.get("ADZUNA_COUNTRY", "").strip().lower()
+    if env_country:
+        return env_country
+
+    try:
+        patterns = filters._config.get("location_allow_patterns", [])
+        combined = " ".join(patterns)
+        for pattern, code in _COUNTRY_INFERENCE_RULES:
+            if pattern.search(combined):
+                return code
+    except Exception:
+        pass
+
+    return "us"
+
+
 def fetch_adzuna(params: dict) -> list[dict]:
     """Adzuna paginates — one page is only `results_per_page` (default 50)
     results, and the free tier's ranking means good matches can be a few
@@ -251,12 +313,14 @@ def fetch_adzuna(params: dict) -> list[dict]:
         )
 
     params = dict(params)  # don't mutate the caller's dict (reused across runs)
+    country = infer_adzuna_country(params)
+    params.pop("country", None)
     max_pages = params.pop("max_pages", 5)
     results_per_page = params.get("results_per_page", 50)
 
     jobs = []
     for page in range(1, max_pages + 1):
-        url = f"https://api.adzuna.com/v1/api/jobs/ca/search/{page}"
+        url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
         query = {
             "app_id": app_id,
             "app_key": app_key,

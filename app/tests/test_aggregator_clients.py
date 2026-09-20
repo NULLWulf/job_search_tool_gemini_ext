@@ -140,6 +140,25 @@ def test_adzuna_queues_discovered_companies():
     print("fetch_adzuna: resolved Greenhouse/Lever match queued into DISCOVERED_COMPANIES — OK")
 
 
+def test_infer_adzuna_country():
+    # 1. Explicit country in params
+    assert aggregator_clients.infer_adzuna_country({"country": "gb", "where": "Raleigh"}) == "gb"
+    assert aggregator_clients.infer_adzuna_country({"country": "CA"}) == "ca"
+
+    # 2. Inferred from 'where'
+    assert aggregator_clients.infer_adzuna_country({"where": "North Carolina"}) == "us"
+    assert aggregator_clients.infer_adzuna_country({"where": "Raleigh, NC"}) == "us"
+    assert aggregator_clients.infer_adzuna_country({"where": "Alberta, Canada"}) == "ca"
+    assert aggregator_clients.infer_adzuna_country({"where": "London, UK"}) == "gb"
+    assert aggregator_clients.infer_adzuna_country({"where": "Berlin"}) == "de"
+    assert aggregator_clients.infer_adzuna_country({"where": "Sydney, Australia"}) == "au"
+
+    # 3. Remote / empty falls back to filters or default 'us'
+    assert aggregator_clients.infer_adzuna_country({"where": "Remote"}) == "us"
+    assert aggregator_clients.infer_adzuna_country({}) == "us"
+    print("infer_adzuna_country: explicit, inferred, and fallback resolution — OK")
+
+
 if __name__ == "__main__":
     test_full_description_prefers_greenhouse_api()
     test_full_description_prefers_lever_api()
@@ -147,4 +166,5 @@ if __name__ == "__main__":
     test_full_description_returns_none_on_failure()
     test_adzuna_only_fetches_full_jd_for_promising_thin_snippets()
     test_adzuna_queues_discovered_companies()
+    test_infer_adzuna_country()
     print("\nAll assertions passed.")
