@@ -11,3 +11,6 @@ web/tsconfig.tsbuildinfo
 data/test_*
 data/
 profile.yaml
+aggregators.yaml
+companies.yaml
+filters.yaml
