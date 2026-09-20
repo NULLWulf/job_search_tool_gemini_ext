@@ -42,7 +42,7 @@ load_dotenv()
 
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "anthropic").lower()
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 OUTPUT_CSV = Path("data/scored_candidates.csv")
 
 REQUIRED_EVAL_FIELDS = ["match_score", "recommendation", "genuine_gaps", "transferable_strengths", "risk_factors"]
