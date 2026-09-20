@@ -2,11 +2,16 @@
 actual noise patterns found in a live run on 2026-08-11 (Remote
 Poland/Spain/Australia leaking through, and non-engineering titles like
 Analyst/Manager/Marketing passing because the old filter was exclusion-only).
-Run with: python -m app.tests.test_pipeline
+Runs against filters.example.yaml rather than filters.yaml (which is gitignored
+and holds personal filter rules) so tests are deterministic for all contributors.
+Run with: python -m app.tests.test_pipeline or python -m pytest app/
 """
 import os
 from app import filters
 from app import dedup
+
+# Ensure this test evaluates against the standard example filter definitions
+filters.load_config("filters.example.yaml")
 
 SAMPLE_JOBS = [
     # Should PASS: real fields, Canada-eligible remote, matches title allowlist
@@ -128,6 +133,10 @@ def main():
     assert not filters.jd_stack_mismatch("")  # no JD available -> don't reject on stack alone
 
     print("\nAll assertions passed.")
+
+
+def test_pipeline():
+    main()
 
 
 if __name__ == "__main__":

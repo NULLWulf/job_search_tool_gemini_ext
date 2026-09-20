@@ -98,5 +98,9 @@ def main():
     print("\nAll assertions passed.")
 
 
+def test_ai_evaluate():
+    main()
+
+
 if __name__ == "__main__":
     main()

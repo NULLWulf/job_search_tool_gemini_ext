@@ -1,8 +1,8 @@
 """Sanity test for discover_companies.py — runs against a throwaway COPY of
-companies.yaml, never the real file. Verifies: known companies are never
+companies.example.yaml, never the real file. Verifies: known companies are never
 re-suggested, duplicates within one run are collapsed, appending preserves
 the existing file's comments/formatting, and the appended block is valid
-YAML that round-trips correctly. Run with: python -m app.tests.test_discover_companies
+YAML that round-trips correctly. Run with: python -m app.tests.test_discover_companies or python -m pytest app/
 """
 import os
 import shutil
@@ -12,11 +12,12 @@ import yaml
 from app import discover_companies
 
 TEST_YAML = "data/test_companies.yaml"
+SOURCE_YAML = "companies.example.yaml" if os.path.exists("companies.example.yaml") else "companies.yaml"
 
 
 def main():
     os.makedirs("data", exist_ok=True)
-    shutil.copy("companies.yaml", TEST_YAML)
+    shutil.copy(SOURCE_YAML, TEST_YAML)
 
     with open(TEST_YAML) as f:
         original_text = f.read()
@@ -68,6 +69,10 @@ def main():
 
     os.remove(TEST_YAML)
     print("\nAll assertions passed.")
+
+
+def test_discover_companies():
+    main()
 
 
 if __name__ == "__main__":

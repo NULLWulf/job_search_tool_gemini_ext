@@ -37,7 +37,13 @@ OUTPUT_CSV = Path("data/candidates.csv")
 
 
 def load_yaml_list(path: str, key: str) -> list[dict]:
-    with open(path) as f:
+    p = Path(path)
+    if not p.exists():
+        example_p = p.with_name(p.stem + ".example" + p.suffix)
+        if example_p.exists():
+            print(f"Note: '{path}' not found, falling back to '{example_p}'. (Run ./locals.sh to create local configs)")
+            path = str(example_p)
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)[key]
 
 

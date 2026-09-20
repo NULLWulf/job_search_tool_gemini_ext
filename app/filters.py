@@ -15,27 +15,41 @@ role AT ALL before we even consider it, then a smaller exclusion list
 catches engineering-adjacent titles that aren't a fit (sales engineer,
 hardware/mechanical engineer, etc).
 """
+import os
 import re
+import sys
 
 import yaml
 
-FILTERS_CONFIG_PATH = "filters.yaml"
+DEFAULT_CONFIG_PATH = "filters.yaml"
+EXAMPLE_CONFIG_PATH = "filters.example.yaml"
 
 
-def _load_config(path: str = FILTERS_CONFIG_PATH) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+def resolve_config_path(path: str | None = None) -> str:
+    """Resolve the path to the filters configuration file.
 
+    Priority:
+    1. Explicit path parameter if passed.
+    2. FILTERS_CONFIG_PATH environment variable.
+    3. If running in a test environment (pytest in modules or PYTEST_CURRENT_TEST set),
+       prefer filters.example.yaml if it exists.
+    4. filters.yaml if it exists (local user-customized config).
+    5. filters.example.yaml fallback if filters.yaml does not exist.
+    6. Default to filters.yaml.
+    """
+    if path:
+        return path
+    if env_path := os.getenv("FILTERS_CONFIG_PATH"):
+        return env_path
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        if os.path.exists(EXAMPLE_CONFIG_PATH):
+            return EXAMPLE_CONFIG_PATH
+    if os.path.exists(DEFAULT_CONFIG_PATH):
+        return DEFAULT_CONFIG_PATH
+    if os.path.exists(EXAMPLE_CONFIG_PATH):
+        return EXAMPLE_CONFIG_PATH
+    return DEFAULT_CONFIG_PATH
 
-_config = _load_config()
-
-PRIORITY_TITLE_KEYWORDS = _config["priority_title_keywords"]
-TITLE_ALLOW_KEYWORDS = _config["title_allow_keywords"]
-EXCLUSION_KEYWORDS = _config["exclusion_keywords"]
-LOCATION_ALLOW_PATTERNS = _config["location_allow_patterns"]
-STACK_DEALBREAKERS = _config["stack_dealbreakers"]
-STACK_CORE = _config["stack_core"]
-TRUNCATED_DESCRIPTION_MIN_CHARS = _config["truncated_description_min_chars"]
 
 def _compile_keyword_alternation(keywords: list[str], config_key: str) -> re.Pattern:
     # An empty keyword list joins to "" and compiles to "()", which matches
@@ -44,18 +58,50 @@ def _compile_keyword_alternation(keywords: list[str], config_key: str) -> re.Pat
     # exclusion list into "exclude everything". Fail loudly instead.
     if not keywords:
         raise ValueError(
-            f"filters.yaml's '{config_key}' is empty — this would silently "
+            f"filters config '{config_key}' is empty — this would silently "
             "match every title instead of none. Add at least one keyword."
         )
     return re.compile("(" + "|".join(re.escape(k) for k in keywords) + ")", re.IGNORECASE)
 
 
-_priority_re = _compile_keyword_alternation(PRIORITY_TITLE_KEYWORDS, "priority_title_keywords")
-_title_allow_re = _compile_keyword_alternation(TITLE_ALLOW_KEYWORDS, "title_allow_keywords")
-_exclusion_re = _compile_keyword_alternation(EXCLUSION_KEYWORDS, "exclusion_keywords")
-_location_res = [re.compile(p, re.IGNORECASE) for p in LOCATION_ALLOW_PATTERNS]
-_dealbreaker_res = [re.compile(p, re.IGNORECASE) for p in STACK_DEALBREAKERS]
-_core_res = [re.compile(p, re.IGNORECASE) for p in STACK_CORE]
+def load_config(path: str | None = None) -> dict:
+    """Load configuration from YAML and compile all matching regexes.
+    Can be called directly to switch configurations (e.g., during tests)."""
+    global FILTERS_CONFIG_PATH
+    global PRIORITY_TITLE_KEYWORDS, TITLE_ALLOW_KEYWORDS, EXCLUSION_KEYWORDS
+    global LOCATION_ALLOW_PATTERNS, STACK_DEALBREAKERS, STACK_CORE
+    global TRUNCATED_DESCRIPTION_MIN_CHARS
+    global _priority_re, _title_allow_re, _exclusion_re
+    global _location_res, _dealbreaker_res, _core_res
+
+    resolved_path = resolve_config_path(path)
+    with open(resolved_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    FILTERS_CONFIG_PATH = resolved_path
+    PRIORITY_TITLE_KEYWORDS = config["priority_title_keywords"]
+    TITLE_ALLOW_KEYWORDS = config["title_allow_keywords"]
+    EXCLUSION_KEYWORDS = config["exclusion_keywords"]
+    LOCATION_ALLOW_PATTERNS = config["location_allow_patterns"]
+    STACK_DEALBREAKERS = config["stack_dealbreakers"]
+    STACK_CORE = config["stack_core"]
+    TRUNCATED_DESCRIPTION_MIN_CHARS = config["truncated_description_min_chars"]
+
+    _priority_re = _compile_keyword_alternation(PRIORITY_TITLE_KEYWORDS, "priority_title_keywords")
+    _title_allow_re = _compile_keyword_alternation(TITLE_ALLOW_KEYWORDS, "title_allow_keywords")
+    _exclusion_re = _compile_keyword_alternation(EXCLUSION_KEYWORDS, "exclusion_keywords")
+    _location_res = [re.compile(p, re.IGNORECASE) for p in LOCATION_ALLOW_PATTERNS]
+    _dealbreaker_res = [re.compile(p, re.IGNORECASE) for p in STACK_DEALBREAKERS]
+    _core_res = [re.compile(p, re.IGNORECASE) for p in STACK_CORE]
+
+    return config
+
+
+# Backwards-compatible alias
+_load_config = load_config
+
+# Initialize config at import time
+_config = load_config()
 
 _html_tag_re = re.compile(r"<[^>]+>")
 

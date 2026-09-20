@@ -31,3 +31,4 @@ jobs:
         python -m app.tests.test_ai_evaluate
       env:
         PYTHONPATH: .
+        FILTERS_CONFIG_PATH: filters.example.yaml
