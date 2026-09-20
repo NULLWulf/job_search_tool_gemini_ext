@@ -1,8 +1,8 @@
-"""Stage 2: AI evaluation via Claude Haiku.
+"""Stage 2: AI evaluation via Anthropic or Gemini.
 
 Reads every job that passed the deterministic filters (filters.py) but
 hasn't been scored yet (dedup.get_unevaluated_candidates), sends it to
-Claude Haiku alongside your profile.yaml, and asks for a FUNCTIONAL FIT
+Claude Haiku or Gemini alongside your profile.yaml, and asks for a FUNCTIONAL FIT
 judgment — not a title match. Results are stored in the ai_evaluations
 table (see dedup.py) and written out to data/scored_candidates.csv, best
 match first.
@@ -14,13 +14,14 @@ it's already passed title/location/stack screening, so the AI-scored
 volume should be small.
 
 Setup:
-    pip install anthropic
+    pip install anthropic google-genai pydantic
     export ANTHROPIC_API_KEY=sk-ant-...
+    export GEMINI_API_KEY=AIzaSy...
 
 Usage:
-    python app/ai_evaluate.py              # evaluate everything unscored
-    python app/ai_evaluate.py --limit 20   # cap this run (e.g. to control cost)
-    python app/ai_evaluate.py --dry-run    # show what WOULD be sent, call nothing
+    python -m app.ai_evaluate              # evaluate everything unscored
+    python -m app.ai_evaluate --limit 20   # cap this run (e.g. to control cost)
+    python -m app.ai_evaluate --dry-run    # show what WOULD be sent, call nothing
 """
 import argparse
 import csv
@@ -31,15 +32,27 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from pydantic import BaseModel, Field
+from typing import Literal
+
 from app import dedup
 from app import filters
 
 load_dotenv()
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "anthropic").lower()
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 OUTPUT_CSV = Path("data/scored_candidates.csv")
 
 REQUIRED_EVAL_FIELDS = ["match_score", "recommendation", "genuine_gaps", "transferable_strengths", "risk_factors"]
+
+class Evaluation(BaseModel):
+    match_score: int = Field(description="Overall functional fit score, 0-100.", ge=0, le=100)
+    recommendation: Literal["apply", "consider", "skip"] = Field(description="apply = strong functional fit, worth the effort. consider = plausible but real gaps/risk. skip = not a genuine fit despite passing keyword filters.")
+    genuine_gaps: str = Field(description="Real, specific gaps between the candidate's experience and this role's requirements. Be honest — don't invent gaps to seem balanced, and don't paper over real ones. Keep to 2-3 sentences.")
+    transferable_strengths: str = Field(description="Which of the candidate's competencies/evidence genuinely transfer to this role, and why — cite specifics from their profile, not generic claims. Keep to 2-3 sentences.")
+    risk_factors: str = Field(description="Non-skill risks: seniority mismatch, domain mismatch, likely comp mismatch, stack dealbreakers the deterministic filter might have missed, company-stage risk given the candidate's stated preferences, etc. Keep to 2-3 sentences.")
 
 # Field order matters here beyond documentation: Claude tends to emit tool
 # JSON in roughly declaration order, and with max_tokens capped, a run of
@@ -100,15 +113,7 @@ def load_profile(path: str = "profile.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-# aggregator_clients.fetch_adzuna now tries to fetch the FULL job posting
-# (see fetch_full_description there) instead of settling for Adzuna's short
-# API snippet — that's the real fix for 2026-08-11's "Adzuna rows scoring
-# low because the description was cut off mid-sentence" problem. This flag
-# is the fallback for the cases that full-JD fetch still can't recover
-# (site blocked scraping, dead redirect, genuinely short posting): tell the
-# model explicitly rather than let a thin description read as "no
-# responsibilities listed" and quietly tank match_score.
-def build_user_prompt(profile: dict, job: dict) -> str:
+def build_user_prompt(profile: dict, job: dict, include_tool_prompt: bool) -> str:
     raw_description = job.get("description", "")
     description = filters.strip_html(raw_description).strip() or "(no JD text available)"
     partial_note = ""
@@ -121,7 +126,7 @@ def build_user_prompt(profile: dict, job: dict) -> str:
             "say anything meaningful about stack or seniority, say so in genuine_gaps rather than "
             "guessing.\n"
         )
-    return f"""CANDIDATE PROFILE:
+    prompt = f"""CANDIDATE PROFILE:
 {yaml.dump(profile, sort_keys=False, allow_unicode=True)}
 
 ---
@@ -133,11 +138,10 @@ Location: {job['location']}
 URL: {job['url']}
 {partial_note}
 Description:
-{description}
-
----
-
-Call submit_evaluation with your structured assessment."""
+{description}"""
+    if include_tool_prompt:
+        prompt += "\n\n---\n\nCall submit_evaluation with your structured assessment."
+    return prompt
 
 
 def _extract_tool_input(resp) -> dict | None:
@@ -151,19 +155,45 @@ def _missing_fields(evaluation: dict) -> list[str]:
     return [f for f in REQUIRED_EVAL_FIELDS if f not in evaluation]
 
 
-def evaluate_one(client, profile: dict, job: dict, max_retries: int = 1) -> dict:
-    """Calls the model and validates the tool response has every required
-    field. A forced tool_choice on a smaller model can still emit a
-    truncated/incomplete JSON object (this happened in production on
-    2026-08-11 — see EVALUATION_SCHEMA's comment) if max_tokens is hit
-    mid-generation; retry once with a bump to max_tokens before giving up,
-    rather than crashing the whole run on one bad response."""
-    user_content = build_user_prompt(profile, job)
+def evaluate_one_gemini(client, profile: dict, job: dict, max_retries: int = 1) -> dict:
+    user_content = build_user_prompt(profile, job, include_tool_prompt=False)
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.interactions.create(
+                model=GEMINI_MODEL,
+                input=user_content,
+                system_instruction=SYSTEM_PROMPT,
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": Evaluation.model_json_schema()
+                }
+            )
+            
+            evaluation = Evaluation.model_validate_json(resp.output_text).model_dump()
+            missing = _missing_fields(evaluation)
+            if not missing:
+                return evaluation
+                
+            if attempt < max_retries:
+                continue
+            raise RuntimeError(f"Model's response for {job['url']} is missing required field(s) "
+                                f"{missing} after {max_retries + 1} attempt(s): {evaluation}")
+                                
+        except Exception as e:
+            if attempt < max_retries:
+                continue
+            raise RuntimeError(f"Evaluation failed for {job['url']}: {e}")
+
+
+def evaluate_one_anthropic(client, profile: dict, job: dict, max_retries: int = 1) -> dict:
+    user_content = build_user_prompt(profile, job, include_tool_prompt=True)
     max_tokens = 1536
 
     for attempt in range(max_retries + 1):
         resp = client.messages.create(
-            model=MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=max_tokens,
             system=SYSTEM_PROMPT,
             tools=[EVALUATION_SCHEMA],
@@ -174,7 +204,7 @@ def evaluate_one(client, profile: dict, job: dict, max_retries: int = 1) -> dict
         if evaluation is None:
             stop_reason = getattr(resp, "stop_reason", "unknown")
             if attempt < max_retries:
-                max_tokens += 512  # give the retry more room in case it was truncation
+                max_tokens += 512
                 continue
             raise RuntimeError(f"Model didn't call submit_evaluation for {job['url']} "
                                 f"(stop_reason={stop_reason})")
@@ -189,10 +219,17 @@ def evaluate_one(client, profile: dict, job: dict, max_retries: int = 1) -> dict
                             f"{missing} after {max_retries + 1} attempt(s): {evaluation}")
 
 
+def evaluate_one(client, profile: dict, job: dict, max_retries: int = 1) -> dict:
+    if AI_PROVIDER == "gemini":
+        return evaluate_one_gemini(client, profile, job, max_retries)
+    else:
+        return evaluate_one_anthropic(client, profile, job, max_retries)
+
+
 def write_csv(conn, path: Path = OUTPUT_CSV) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = list(dedup.iter_scored_candidates(conn))
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "match_score", "recommendation", "company", "title", "location",
             "transferable_strengths", "genuine_gaps", "risk_factors", "url", "posted_at",
@@ -225,15 +262,26 @@ if __name__ == "__main__":
                 print(f"WOULD EVALUATE | {job['company']:20s} | {job['title']}")
             sys.exit(0)
 
-        try:
-            import anthropic
-        except ImportError:
-            sys.exit("Missing dependency: pip install anthropic")
-
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            sys.exit("ANTHROPIC_API_KEY env var not set.")
-        client = anthropic.Anthropic(api_key=api_key)
+        if AI_PROVIDER == "gemini":
+            try:
+                from google import genai
+            except ImportError:
+                sys.exit("Missing dependency: pip install google-genai")
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                sys.exit("GEMINI_API_KEY env var not set.")
+            client = genai.Client(api_key=api_key)
+            current_model = GEMINI_MODEL
+        else:
+            try:
+                import anthropic
+            except ImportError:
+                sys.exit("Missing dependency: pip install anthropic")
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                sys.exit("ANTHROPIC_API_KEY env var not set.")
+            client = anthropic.Anthropic(api_key=api_key)
+            current_model = ANTHROPIC_MODEL
 
         for i, job in enumerate(queue, 1):
             try:
@@ -241,7 +289,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"[WARN] {job['company']} — {job['title']}: evaluation failed — {e}", file=sys.stderr)
                 continue
-            dedup.save_evaluation(conn, job["url"], evaluation, MODEL)
+            dedup.save_evaluation(conn, job["url"], evaluation, current_model)
             conn.commit()  # commit per-job so a crash mid-run doesn't lose completed evaluations
             print(f"[{i}/{len(queue)}] {evaluation['match_score']:3d} {evaluation['recommendation']:9s} | "
                   f"{job['company']:20s} | {job['title']}")

@@ -1,6 +1,6 @@
 """Sanity test for ai_evaluate.py's non-API-calling parts: profile loading,
 prompt construction, and the DB round-trip (save_evaluation -> CSV output).
-Doesn't call Anthropic — that needs a real API key and costs money, so it's
+Doesn't call an AI provider — that needs a real API key and costs money, so it's
 excluded from this offline test. Run with: python -m app.tests.test_ai_evaluate
 
 Loads profile.example.yaml rather than profile.yaml (which is gitignored
@@ -36,7 +36,7 @@ def main():
         "well past the truncation-detection floor so this represents a genuine complete JD, not a "
         "short aggregator teaser snippet. " * 4,
     }
-    prompt = ai_evaluate.build_user_prompt(profile, job)
+    prompt = ai_evaluate.build_user_prompt(profile, job, include_tool_prompt=True)
     assert "Python" in prompt and "<b>" not in prompt
     assert "Affirm" in prompt
     assert "NOTE: this description looks like a short snippet" not in prompt  # full-length JD, no flag expected
@@ -61,7 +61,7 @@ def main():
         "url": "https://www.adzuna.ca/details/5702928490",
         "description": "Build automated marketing tooling. Curiosity is the driving force behind…",
     }
-    adzuna_prompt = ai_evaluate.build_user_prompt(profile, adzuna_job)
+    adzuna_prompt = ai_evaluate.build_user_prompt(profile, adzuna_job, include_tool_prompt=False)
     assert "NOTE: this description looks like a short snippet" in adzuna_prompt
     print("Truncated-description flagging OK")
 
@@ -80,7 +80,7 @@ def main():
             "transferable_strengths": "Backend architecture depth (Elementica, BenchSci) transfers directly.",
             "risk_factors": "None significant given Canada-remote eligibility.",
         }
-        dedup.save_evaluation(conn, job["url"], fake_evaluation, model="claude-haiku-4-5")
+        dedup.save_evaluation(conn, job["url"], fake_evaluation, model="gemini-3.8-flash")
 
         queue_after = dedup.get_unevaluated_candidates(conn)
         assert len(queue_after) == 0, "job should no longer be in the unevaluated queue after scoring"

@@ -30,7 +30,7 @@ is sent to a third party beyond fetching the postings themselves.
    normalized company+title, so re-runs only ever surface genuinely new
    postings.
 4. **AI evaluation** (`app/ai_evaluate.py`, optional, costs money) — sends
-   each filtered candidate plus your `profile.yaml` to Claude, which scores
+   each filtered candidate plus your `profile.yaml` to Anthropic Claude or Google Gemini, which scores
    fit (0-100) and returns concrete gaps, transferable strengths, risk
    factors, and an apply/consider/skip recommendation.
 5. **Review** (`web/`) — a local Next.js app reading/writing the same
@@ -58,7 +58,7 @@ not the bar. For a fully worked (fictional) example showing the level of
 specificity/quantification each evidence bullet should actually have, see
 [`profile.sample.yaml`](profile.sample.yaml).
 
-`ANTHROPIC_API_KEY` is only needed for the AI evaluation step. Adzuna
+`ANTHROPIC_API_KEY` or `GEMINI_API_KEY` are only needed for the AI evaluation step. Set `AI_PROVIDER` in your `.env` to select which one to use. Adzuna
 (`ADZUNA_APP_ID`/`ADZUNA_APP_KEY`) is only needed if you keep an Adzuna
 entry in `aggregators.yaml` — register a free key at
 [developer.adzuna.com](https://developer.adzuna.com). Remotive needs no
@@ -166,7 +166,7 @@ app/
   filters.py               loads and applies filters.yaml's rules
   dedup.py                 SQLite store (seen_jobs, job_details)
   discover_companies.py    auto-appends newly-resolved companies to companies.yaml
-  ai_evaluate.py           stage 2: Claude-based fit scoring
+  ai_evaluate.py           stage 2: AI-based fit scoring (Anthropic or Gemini)
   inspect_job.py           CLI to look up a stored job or list recent rejections
   refilter.py              re-runs current filters.py against already-fetched jobs
   scripts/                 one-off diagnostic/maintenance scripts, not part of the pipeline
